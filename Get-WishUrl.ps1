@@ -9,9 +9,6 @@
 .EXAMPLE
   # On Windows
   PS C:\Users\Alice> .\Get-WishUrl.ps1
-
-  # Directly from github
-  PS C:\Users\Alice> iex (irm 'https://github.com/jogerj/genshin-wish-url/raw/main/Get-WishUrl.ps1')
 .NOTES
   Version:  0.14.0
   Author:   jogerj
@@ -33,9 +30,41 @@ function Get-ValidatedWishUrl {
     # CN
     $WishUrl = $WishUrl -replace "https:\/\/webstatic.+html\?", "https://public-operation-hk4e.mihoyo.com/gacha_info/api/getGachaLog?"
   }
+
+  # Only send the extracted URL to known official wish-history hosts and paths.
+  try {
+    $parsedWishUrl = [System.Uri]::new($WishUrl)
+  }
+  catch {
+    Write-Host "The extracted wish URL is malformed and will not be requested." -ForegroundColor Red
+    return $null
+  }
+  $allowedHosts = @(
+    "public-operation-hk4e-sg.hoyoverse.com",
+    "public-operation-hk4e.mihoyo.com",
+    "hk4e-api-os.hoyoverse.com",
+    "hk4e-api.mihoyo.com"
+  )
+  $allowedPaths = @(
+    "/gacha_info/api/getGachaLog",
+    "/event/gacha_info/api/getGachaLog"
+  )
+  if (
+    $parsedWishUrl.Scheme -ne "https" -or
+    -not $parsedWishUrl.IsDefaultPort -or
+    $parsedWishUrl.UserInfo -ne "" -or
+    $parsedWishUrl.Fragment -ne "" -or
+    $allowedHosts -notcontains $parsedWishUrl.DnsSafeHost.ToLowerInvariant() -or
+    $allowedPaths -notcontains $parsedWishUrl.AbsolutePath -or
+    $parsedWishUrl.Query -notmatch "(?:\?|&)game_biz=hk4e_(?:global|cn)(?:&|$)"
+  ) {
+    Write-Host "The extracted URL is not an official Genshin wish-history URL and will not be requested." -ForegroundColor Red
+    return $null
+  }
+
   # Check validity
   try {
-    $urlResponse = Invoke-RestMethod -URI $WishUrl -ContentType 'application/json' -Method Get
+    $urlResponse = Invoke-RestMethod -URI $WishUrl -ContentType 'application/json' -Method Get -MaximumRedirection 0
     # Test OK
     if ($urlResponse.message -ne "OK") {
       Write-Host "URL found but it is expired/invalid! Open `"Wish History`" page again to fetch a new URL!" -ForegroundColor Yellow
@@ -86,90 +115,63 @@ function Get-GenshinLogPath {
   }
 }
 
-function Invoke-RunAsAdminPrompt {
-  if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {
-    Write-Host "Do you want to try to run the script as Administrator? Press [ENTER] to continue, or any key to cancel." -ForegroundColor DarkCyan
-    $keyInput = [Console]::ReadKey($true).Key
-    if ($keyInput -ne "13") {
-      return
-    }
-    $arguments = "& '" + $myinvocation.mycommand.definition + "'"
-    Start-Process powershell -Verb runAs -ArgumentList "-noexit $arguments $reg"
-  }
-  else {
-    Write-Host "Make sure Genshin Impact is installed and open `"Wish History`" page at least once." -ForegroundColor Red
-  }
-}
 
-function Stop-BrowserProcessSilently {
-  [CmdletBinding(SupportsShouldProcess)]
-  param ()
-  $retryLimit = 5
-  $retryCount = 0
-  while ($retryCount -lt $retryLimit) {
-    $zfBrowser = Get-Process -Name "ZFGameBrowser" -ErrorAction SilentlyContinue
-    if ($zfBrowser) {
-      $zfBrowser | Stop-Process -Force
-      Start-Sleep 2
-      $retryCount++
-    }
-    else {
-      break
-    }
-  }
-  if ($retryCount -gt 0) {
-    # if retried, then browser was running
-    Write-Host "Waiting for in-game browser process to close..." -ForegroundColor Yellow
-    # Wait for file lock to release
-    Start-Sleep 10
-  } # else no need to wait
-}
 
-function Remove-CacheFolder {
-  [CmdletBinding(SupportsShouldProcess)]
+function Get-LatestCacheSegment {
   param (
-    [string]$CacheFolderPath
+    [string]$Path
   )
-  $retryLimit = 5
-  $retryCount = 0
-  while ((Test-Path "$CacheFolderPath") -and ($retryCount -lt $retryLimit)) {
-    Remove-Item -Recurse -Force "$CacheFolderPath" -ErrorAction SilentlyContinue
-    $retryCount++
-    Start-Sleep 2
-  }
-}
 
-function Invoke-PromptClearCache {
-  param (
-    [string]$CacheFolderPath
-  )
-  Write-Host "Do you want to try to clear the cache folder? This will require restarting Genshin Impact if the game is running.
-(This will force the game to generate a new cache file)
-Press [ENTER] to continue, or any key to cancel." -ForegroundColor DarkCyan
-  $keyInput = [Console]::ReadKey($true).Key
-  if ($keyInput -eq "13") {
-    # kill browser if Genshin is running
-    Stop-BrowserProcessSilently
-    # remove webCaches folder to force game to generate new cache
-    Remove-CacheFolder "$CacheFolderPath"
-    Write-Host "Cache folder cleared! Please restart Genshin Impact and reopen `"Wish History`"!" -ForegroundColor Red
+  $share = [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete
+  $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, $share)
+  $reader = [System.IO.StreamReader]::new($stream, [System.Text.Encoding]::UTF8, $true)
+  $buffer = New-Object 'char[]' 65536
+  $carry = ''
+  $latestSegment = ''
+  $hasSeparator = $false
+  $maxSegmentLength = 262144
+
+  try {
+    while (($charactersRead = $reader.Read($buffer, 0, $buffer.Length)) -gt 0) {
+      $currentChunk = [string]::new($buffer, 0, $charactersRead)
+      $combined = $carry + $currentChunk
+      $separatorIndex = $combined.LastIndexOf('1/0/', [System.StringComparison]::Ordinal)
+
+      if ($separatorIndex -ge 0) {
+        $latestSegment = $combined.Substring($separatorIndex + 4)
+        $hasSeparator = $true
+      }
+      elseif ($hasSeparator) {
+        $latestSegment += $currentChunk
+      }
+
+      if ($latestSegment.Length -gt $maxSegmentLength) {
+        $latestSegment = $latestSegment.Substring($latestSegment.Length - $maxSegmentLength)
+      }
+
+      $carry = if ($combined.Length -gt 3) { $combined.Substring($combined.Length - 3) } else { $combined }
+    }
   }
-  else {
-    Write-Host "Please reopen `"Wish History`" to fetch new URL!" -ForegroundColor Red
+  finally {
+    $reader.Dispose()
   }
+
+  if ($hasSeparator) {
+    return $latestSegment
+  }
+  return $null
 }
 
 function Get-GenshinWishUrl {
   $LogPath = Get-GenshinLogPath
   if (-not $LogPath) {
     Write-Host "Cannot find Genshin Impact log file! Make sure to run Genshin Impact and open the wish history at least once!" -ForegroundColor Red
-    Invoke-RunAsAdminPrompt
+    Write-Host "This utility reads files in your user profile and does not require Administrator privileges." -ForegroundColor DarkCyan
     return $null
   }
 
-  $LogsContent = Get-Content -Path $LogPath
-  $GameDataPathRegexPattern = "(?m).:/.+(GenshinImpact_Data|YuanShen_Data)"
-  $LogMatch = $LogsContent -match $GameDataPathRegexPattern
+  $GameDataPathRegexPattern = ".:/.+(GenshinImpact_Data|YuanShen_Data)"
+  $LogMatch = Select-String -Path $LogPath -Pattern $GameDataPathRegexPattern | Select-Object -Last 1
 
   if (-not $LogMatch) {
     Write-Host "Cannot find Genshin Impact path in log file! Make sure to run Genshin Impact and open the wish history at least once!" -ForegroundColor Red
@@ -177,7 +179,7 @@ function Get-GenshinWishUrl {
     return $null
   }
 
-  $GameDataPath = ($LogMatch | Select-Object -Last 1) -match $GameDataPathRegexPattern
+  $null = $LogMatch.Line -match $GameDataPathRegexPattern
   $GameDataPath = $Matches[0]
   $CacheFolderPath = "$GameDataPath/webCaches"
   try {
@@ -196,13 +198,8 @@ function Get-GenshinWishUrl {
           throw "Cache file is too old!"
         }
 
-        $tmpFile = "$env:TEMP/ch_data_2"
-        Copy-Item $cachePath -Destination $tmpFile
-        $content = Get-Content -Encoding UTF8 -Raw $tmpfile
-        Remove-Item $tmpFile
-
-        $splitted = $content -split "1/0/" | Select-Object -Last 1
-        $found = $splitted -match "https.+?game_biz=hk4e_(global|cn)"
+        $latestCacheSegment = Get-LatestCacheSegment -Path $cachePath
+        $found = $latestCacheSegment -match "https.+?game_biz=hk4e_(global|cn)"
         if ($found) {
           $cacheVer = Split-Path $cacheVerPath -Leaf
           Write-Host "Wish URL file found in $cacheVer cache! Validating wish URL..." -ForegroundColor Green
@@ -210,16 +207,16 @@ function Get-GenshinWishUrl {
           if ($wishUrl) {
             Write-Host "Wish URL validated!" -ForegroundColor Green
             Set-Clipboard -Value $WishUrl
-            Write-Host "URL copied to clipboard, paste it on any Genshin Impact ($([char]0x539f)$([char]0x795e)) wish tracker`nor Ctrl-Click to open in web browser." -ForegroundColor Green
-            return $wishUrl
+            Write-Host "URL copied to clipboard, paste it on any Genshin Impact ($([char]0x539f)$([char]0x795e)) wish tracker. Keep the link private." -ForegroundColor Green
+            return $null
           }
         }
         throw "No valid URL found in cache!"
       }
       catch {
-        Write-Host "Encountered error: "$_.Exception.Message -ForegroundColor Yellow
+        Write-Host "The local cache could not be read safely." -ForegroundColor Yellow
         Write-Host "Cache folder was found but could not find valid wish URL in the files!" -ForegroundColor Yellow
-        Invoke-PromptClearCache "$CacheFolderPath"
+        Write-Host "Reopen Wish History in the game, then try again." -ForegroundColor Yellow
       }
     }
     else {
@@ -227,7 +224,7 @@ function Get-GenshinWishUrl {
     }
   }
   catch {
-    Write-Host "Encountered error: "$_.Exception.Message -ForegroundColor Red
+    Write-Host "The wish URL could not be retrieved from the local game data." -ForegroundColor Red
     Pause
   }
   return $null
