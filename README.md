@@ -4,10 +4,11 @@ A PowerShell utility for extracting the latest Genshin Impact wish-history URL f
 
 ## Usage
 
-1. Open Wish History in Genshin Impact.
-2. Download [Get-WishUrl.ps1](./Get-WishUrl.ps1), inspect the file and open PowerShell in its folder.
-3. Run the local file with `.\Get-WishUrl.ps1`. Windows may ask you to unblock the downloaded file in its Properties after reviewing it.
-4. Paste the copied URL directly into the import page. The URL contains a private session key.
+1. Open Wish History in Genshin Impact on Windows and wait for the page to load.
+2. Open the [web importer](https://paimon-moe.vercel.app/wish/import). Copy the displayed command and paste it into Windows PowerShell from any directory.
+3. The command downloads a pinned revision of this repository to a temporary file, verifies its SHA-256 and runs it. Paste the link it copies into the importer. The link contains a private session key.
+
+For manual review, open [Get-WishUrl.ps1](./Get-WishUrl.ps1) on GitHub.
 
 The script supports Global and China on PowerShell 5.1 and newer. It reads the local cache with your ordinary user permissions and validates the URL with the official game service.
 
@@ -27,7 +28,6 @@ Please preserve the upstream credits and license when modifying or redistributin
 
 - [Paimon.moe](https://paimon.moe/)
 - [Paimon.moe Discord](https://discord.com/channels/820601523125747712/820601523125747715/1012175730873991228)
-- [Android wish URL instructions](https://gist.github.com/jogerj/2372d0e5bee51e001a6d8956240d527b)
 
 ## License
 
