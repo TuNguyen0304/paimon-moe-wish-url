@@ -191,12 +191,14 @@ function Get-GenshinWishUrl {
         $cachePath = "$cacheVerPath/Cache/Cache_Data/data_2"
 
         if (-not (Test-Path $cachePath)) {
-          throw "Cache file not found!"
+          Write-Host "The latest cache folder has no Cache_Data/data_2 file. Open Wish History and wait for the list to load." -ForegroundColor Yellow
+          return
         }
 
         # check cache not older than 2 days
         if ((Get-Item $cachePath).LastWriteTime -le $(Get-Date).AddDays(-2)) {
-          throw "Cache file is too old!"
+          Write-Host "The wish cache is more than two days old. Open Wish History to update it." -ForegroundColor Yellow
+          return
         }
 
         $latestCacheSegment = Get-LatestCacheSegment -Path $cachePath
@@ -211,12 +213,12 @@ function Get-GenshinWishUrl {
             Write-Host "URL copied to clipboard, paste it on any Genshin Impact ($([char]0x539f)$([char]0x795e)) wish tracker. Keep the link private." -ForegroundColor Green
             return $null
           }
+          return
         }
-        throw "No valid URL found in cache!"
+        Write-Host "The cache was read but contains no matching wish URL. Reopen Wish History." -ForegroundColor Yellow
       }
       catch {
         Write-Host "The local cache could not be read safely." -ForegroundColor Yellow
-        Write-Host "Cache folder was found but could not find valid wish URL in the files!" -ForegroundColor Yellow
         Write-Host "Reopen Wish History in the game, then try again." -ForegroundColor Yellow
       }
     }
