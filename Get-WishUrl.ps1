@@ -141,12 +141,13 @@ function Get-LatestCacheSegment {
         $latestSegment = $combined.Substring($separatorIndex + 4)
         $hasSeparator = $true
       }
-      elseif ($hasSeparator) {
+      elseif ($hasSeparator -and $latestSegment.Length -lt $maxSegmentLength) {
         $latestSegment += $currentChunk
       }
 
       if ($latestSegment.Length -gt $maxSegmentLength) {
-        $latestSegment = $latestSegment.Substring($latestSegment.Length - $maxSegmentLength)
+        # The URL starts after the marker. Cache padding can extend far beyond it.
+        $latestSegment = $latestSegment.Substring(0, $maxSegmentLength)
       }
 
       $carry = if ($combined.Length -gt 3) { $combined.Substring($combined.Length - 3) } else { $combined }
